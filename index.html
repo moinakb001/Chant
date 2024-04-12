@@ -1,0 +1,17 @@
+<html>
+    <head>
+        <script src="./worker.js" type="module"></script>
+        <script>
+            console.log(globalThis.mupdf);
+            var w = new Worker("./worker.js", {type: "module"})
+        </script>
+        <!--script src="./lib/pdfjs/pdf.mjs" type="module"></script>
+        <script src="./main.mjs" type="module"> </script-->
+        <title>
+            Simultaneous chant stand
+        </title>
+    </head>
+    <body style="width: 100%; height: 100%; margin: 0;">
+        <canvas style="width: 100%; height: 100%;" id="the-canvas"></canvas>
+    </body>
+</html>
