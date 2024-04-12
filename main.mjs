@@ -14,7 +14,7 @@ canvas.width = canvas.clientWidth * devPix;
 canvas.height = canvas.clientHeight * devPix;
 
 
-var maxWorkers = 10;
+var maxWorkers = navigator.hardwareConcurrency;
 var workers = [];
 var outstandingJobs = [];
 var imgs = [];
