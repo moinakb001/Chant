@@ -245,7 +245,6 @@ ctx.fillRect(0, 0, canvas.width, canvas.height);
             curView.page--;
         }
     }
-    while(1)continue;
     queueAnim();
 
 });
