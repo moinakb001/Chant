@@ -178,6 +178,7 @@ canvas.addEventListener("touchstart", (e) => {
     var i = 0;
     while(curTouchNum < 2 && i < e.changedTouches.length)
     {
+        if(curTouchNum==1 && e.changedTouches[i].identifier == curTouches[0].identifier) continue;
         curTouches[curTouchNum] = copyTouch(e.changedTouches[i]);
         i++;
         curTouchNum++;
