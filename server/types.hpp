@@ -18,3 +18,12 @@ unwrap(s, 32);
 unwrap(s, 64);
 unwrap(s, 128);
 
+#undef unwrap
+
+template<typename T>
+struct buf_t
+{
+    T *arr;
+    u64 num;
+};
+
