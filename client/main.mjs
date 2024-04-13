@@ -188,14 +188,10 @@ var centroid = (a, b) => {return {pageX: (a.pageX + b.pageX) / 2, pageY: (a.page
 canvas.addEventListener("touchmove", (e) => {
     e.preventDefault();
     var init = curTouches[0];
-    ctx.fillStyle = "blue";
-ctx.fillRect(0, 0, canvas.width, canvas.height);
     if(curTouchNum == 2)
     {
         init = centroid(curTouches[0], curTouches[1]);
     }
-    ctx.fillStyle = "red";
-ctx.fillRect(0, 0, canvas.width, canvas.height);
     var arr = [0, 0];
     for(var t of e.changedTouches)
     {
@@ -209,14 +205,10 @@ ctx.fillRect(0, 0, canvas.width, canvas.height);
         }
     }
     var fini = arr[0];
-    ctx.fillStyle = "green";
-ctx.fillRect(0, 0, canvas.width, canvas.height);
     if(curTouchNum == 2)
     {
         fini = centroid(arr[0], arr[1]);
     }
-    ctx.fillStyle = "yellow";
-ctx.fillRect(0, 0, canvas.width, canvas.height);
     curTouches = arr;
     
     curView.y += (init.pageY - fini.pageY) * curView.scale * devPix;
