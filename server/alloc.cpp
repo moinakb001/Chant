@@ -15,12 +15,14 @@ buf_t<u8> arenaAlloc(Arena *pArena, u64 size, u64 align )
     u64 base = 0;
     u64 alignMask = align - 1;
     
-    b needAlloc = (align >= backingPageSize) || (size >= backingPageSize) || (pArena->curOffs == 0);
-    if (!needAlloc)
+    b offsZero = (pArena->curOffs == 0);
+    b wontFit = 0;
+    if (!offsZero)
     {
-        needAlloc = (((pArena->curOffs + backingPageSize + alignMask) & (~alignMask)) + size) <= pArena->pChunkHead->chunkSize;
+        wontFit = (((pArena->curOffs + backingPageSize + alignMask) & (~alignMask)) + size) <= pArena->pChunkHead->chunkSize;
     }
-    if (needAlloc && pArena->curOffs != 0)
+    b needAlloc = offsZero || wontFit;
+    if (wontFit)
     {
         u64 toAdd = pArena->pChunkHead->chunkSize - pArena->curOffs;
         pArena->curOffs = 0 ;

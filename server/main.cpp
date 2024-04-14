@@ -76,6 +76,8 @@ constexpr u64 numCbSlots = ringDepth * 5;
 u64 freeMask[(numCbSlots + 63) >> 6];
 CbInfo cbSlots[numCbSlots];
 
+Arena mainAlloc{};
+
 void initIoCtx(IoCtx *pCtx)
 {
     s32 retVal;
@@ -85,7 +87,7 @@ void initIoCtx(IoCtx *pCtx)
     AOE(io_uring_register_files_sparse(&pCtx->ring, 1 << 10));
     pCtx->pBufRing = io_uring_setup_buf_ring(&pCtx->ring, numBufs, bufBgid, 0, (int*) &retVal);
     AOE(retVal);
-    pCtx->pBufferGroup = (BufferGroup *) mmap(NULL, sizeof(BufferGroup), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    pCtx->pBufferGroup = arenaAllocObj<BufferGroup>(&mainAlloc);
     for(u64 i = 0; i < numBufs; i++)
     {
         io_uring_buf_ring_add(pCtx->pBufRing, &(pCtx->pBufferGroup->buffers[i]), bufSize, i + 1, io_uring_buf_ring_mask(numBufs), i);
@@ -214,21 +216,20 @@ u32 registerIoFile(IoCtx *pIoCtx, u32 fd)
     return (u32)pIoCtx->fOffs++;
 }
 
-Arena mainAlloc{};
-
 int main()
 {
     IoCtx ctx;
+    
+    arenaInit(&mainAlloc, 1 << 15);
     initIoCtx(&ctx);
-    arenaInit(&mainAlloc, 1 << 20);
     u32 sock = (u32) socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(4269);
     addr.sin_addr.s_addr = 0;
-    u32 rFd = registerIoFile(&ctx, sock);
     AOE(bind(sock, (struct sockaddr*)&addr, sizeof(addr)));
     AOE(listen(sock, 0));
+    u32 rFd = registerIoFile(&ctx, sock);
     CbInfo info{};
     info.fn = acceptCb;
     info.ctx = 0xdeadbeef;

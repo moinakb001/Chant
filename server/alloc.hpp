@@ -61,7 +61,8 @@ static inline void arenaRemoveChunk(Arena *pArena)
 }
 static inline u64 arenaIdealChunkAlloc(u64 amt)
 {
-    return ((amt + sizeof(ArenaChunk) + backingPageSize - 1llu) & ~backingPageSize) - sizeof(ArenaChunk);
+    u64 ret =  ((amt + sizeof(ArenaChunk) + backingPageSize - 1llu) & (~(backingPageSize - 1llu))) - sizeof(ArenaChunk);
+    return ret;
 }
 
 static inline void arenaInit(Arena *pArena, u64 chunkSize)
