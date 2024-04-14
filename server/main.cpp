@@ -6,6 +6,10 @@
 #include "types.hpp"
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include "alloc.hpp"
+
+//Unity Build
+#include "alloc.cpp"
 
 constexpr u64 ringDepth = 64;
 constexpr u64 lgNumBufs =  10;
@@ -37,6 +41,7 @@ struct IoCtx {
     io_uring ring;
     io_uring_buf_ring *pBufRing;
     BufferGroup *pBufferGroup;
+    u64 fOffs;
 };
 
 struct CbResult
@@ -77,7 +82,7 @@ void initIoCtx(IoCtx *pCtx)
     io_uring_params params{};
     params.flags = IORING_SETUP_COOP_TASKRUN;
     AOE(io_uring_queue_init_params(ringDepth, &pCtx->ring, &params));
-    AOE(io_uring_register_files_sparse(&pCtx->ring, 1 << 5));
+    AOE(io_uring_register_files_sparse(&pCtx->ring, 1 << 10));
     pCtx->pBufRing = io_uring_setup_buf_ring(&pCtx->ring, numBufs, bufBgid, 0, (int*) &retVal);
     AOE(retVal);
     pCtx->pBufferGroup = (BufferGroup *) mmap(NULL, sizeof(BufferGroup), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
@@ -86,6 +91,8 @@ void initIoCtx(IoCtx *pCtx)
         io_uring_buf_ring_add(pCtx->pBufRing, &(pCtx->pBufferGroup->buffers[i]), bufSize, i + 1, io_uring_buf_ring_mask(numBufs), i);
     }
     io_uring_buf_ring_advance(pCtx->pBufRing, numBufs);
+    io_uring_register_ring_fd(&pCtx->ring);
+    pCtx->fOffs = 0;
     return;
 }
 constexpr u64 INVALID_SLOT = 0-1llu;
@@ -123,18 +130,20 @@ void queueIoOperation(IoCtx *pCtx, CbInfo cbInf, OpType type, u64 fd, u<1> repea
         case OpType::Accept:
         {
             io_uring_prep_multishot_accept_direct(sqe, (int) fd, NULL, NULL, 0);
+            sqe->flags |= IOSQE_FIXED_FILE;
             break;
         }
         case OpType::Read:
         {
             io_uring_prep_read(sqe, (int)fd, 0, 0, -1);
             sqe->buf_group = bufBgid;
-            sqe->flags |= IOSQE_BUFFER_SELECT;
+            sqe->flags |= IOSQE_BUFFER_SELECT | IOSQE_FIXED_FILE;
             break;
         }
         case OpType::Write:
         {
             io_uring_prep_write(sqe, (int)fd, data.arr, data.num, -1);
+            sqe->flags |= IOSQE_FIXED_FILE;
             break;
         }
         default: 
@@ -167,6 +176,7 @@ void dequeueIoAndCb(IoCtx *pCtx)
         case 1:
         {
             io_uring_prep_multishot_accept_direct(pSqe, (int) ptr.fd, NULL, NULL, 0);
+            pSqe->flags |= IOSQE_FIXED_FILE;
             io_uring_submit(&pCtx->ring);
             break;
         }
@@ -174,7 +184,7 @@ void dequeueIoAndCb(IoCtx *pCtx)
         {
             io_uring_prep_read(pSqe, (int)ptr.fd, 0, 0, -1);
             pSqe->buf_group = bufBgid;
-            pSqe->flags |= IOSQE_BUFFER_SELECT;
+            pSqe->flags |= IOSQE_BUFFER_SELECT | IOSQE_FIXED_FILE;
             io_uring_submit(&pCtx->ring);
             break;
         }
@@ -198,24 +208,33 @@ void acceptCb(CbResult result)
     printf("got here at least %llx %d\n", result.ctx, result.result);
     return;
 }
+u32 registerIoFile(IoCtx *pIoCtx, u32 fd)
+{
+    AOE(io_uring_register_files_update(&pIoCtx->ring, pIoCtx->fOffs, (int*)&fd, 1));
+    return (u32)pIoCtx->fOffs++;
+}
+
+Arena mainAlloc{};
 
 int main()
 {
     IoCtx ctx;
     initIoCtx(&ctx);
-    
+    arenaInit(&mainAlloc, 1 << 20);
     u32 sock = (u32) socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(4269);
     addr.sin_addr.s_addr = 0;
+    u32 rFd = registerIoFile(&ctx, sock);
     AOE(bind(sock, (struct sockaddr*)&addr, sizeof(addr)));
     AOE(listen(sock, 0));
     CbInfo info{};
     info.fn = acceptCb;
     info.ctx = 0xdeadbeef;
-    queueIoOperation(&ctx, info, OpType::Accept, sock, 1, buf_t<u8>{});
+    queueIoOperation(&ctx, info, OpType::Accept, rFd, 1, buf_t<u8>{});
     while(1) dequeueIoAndCb(&ctx);
+
     //io_uring_setup()
     return 0;
 }

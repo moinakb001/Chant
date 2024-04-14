@@ -1,3 +1,4 @@
+#pragma once
 template <unsigned long long x>
 using u = unsigned _BitInt(x);
 
@@ -17,6 +18,8 @@ unwrap(s, 16);
 unwrap(s, 32);
 unwrap(s, 64);
 unwrap(s, 128);
+
+using b = u<1>;
 
 #undef unwrap
 
