@@ -2,6 +2,7 @@
 #include "webgpu/lib_webgpu.cpp"
 #include "webgpu/lib_webgpu_cpp20.cpp"
 #include <stdio.h>
+#include <emscripten/wasm_worker.h>
 
 
 WGpuAdapter adapter;
@@ -103,6 +104,10 @@ void ObtainedWebGpuAdapter(WGpuAdapter result, void *userData)
   WGpuDeviceDescriptor deviceDesc = {};
   wgpu_adapter_request_device_async(adapter, &deviceDesc, ObtainedWebGpuDevice, 0);
 }
+void doStuff()
+{
+  printf("what the fuck\n");
+}
 
 extern "C"
 int main()
@@ -111,4 +116,6 @@ int main()
   options.powerPreference = WGPU_POWER_PREFERENCE_LOW_POWER;
 
   navigator_gpu_request_adapter_async(&options, ObtainedWebGpuAdapter, 0);
+  auto worker = emscripten_malloc_wasm_worker(4096);
+  emscripten_wasm_worker_post_function_v(worker, doStuff);
 }
