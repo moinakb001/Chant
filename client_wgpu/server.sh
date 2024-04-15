@@ -20,8 +20,10 @@ hash1="$(hash "$target_cert1")";
  
 openssl req -x509 -newkey rsa:3072 -keyout "$target_key2" -out "$target_cert2" $openssl_params
 hash2="$(hash "$target_cert2")";
+
+cd "$(dirname "$0")/dist"
  
-echo "$password" | python3 "$(cd "$(dirname "$0")" && pwd)/https.py" "$ip" "$port" "$user" \
+echo "$password" | python3 "$(pwd)/../https.py" "$ip" "$port" "$user" \
     "$timeout" "$target_key1" "$target_cert1" "$hash1" "$target_key2" "$target_cert2" "$hash2";
  
 shred "$target_key" || true

@@ -1,6 +1,6 @@
-#include "lib_webgpu.h"
-#include "lib_webgpu.cpp"
-#include "lib_webgpu_cpp20.cpp"
+#include "webgpu/lib_webgpu.h"
+#include "webgpu/lib_webgpu.cpp"
+#include "webgpu/lib_webgpu_cpp20.cpp"
 #include <stdio.h>
 
 
@@ -12,7 +12,6 @@ WGpuRenderPipeline renderPipeline;
 
 EM_BOOL raf(double time, void *userData)
 {
-  printf("WHATS?\n");
   WGpuCommandEncoder encoder = wgpu_device_create_command_encoder(device, 0);
 
   WGpuRenderPassColorAttachment colorAttachment = WGPU_RENDER_PASS_COLOR_ATTACHMENT_DEFAULT_INITIALIZER;
@@ -53,13 +52,12 @@ EM_BOOL resizeStuff()
 
 void ObtainedWebGpuDevice(WGpuDevice result, void *userData)
 {
-  printf("everywhere?\n");
   device = result;
   queue = wgpu_device_get_queue(device);
 
-  const char *vertexShader =
+  const char *shader =
     "@vertex\n"
-    "fn main(@builtin(vertex_index) vertexIndex : u32) -> @builtin(position) vec4<f32> {\n"
+    "fn vmain(@builtin(vertex_index) vertexIndex : u32) -> @builtin(position) vec4<f32> {\n"
       "var pos = array<vec2<f32>, 3>(\n"
         "vec2<f32>(0.0, 0.5),\n"
         "vec2<f32>(-0.5, -0.5),\n"
@@ -67,34 +65,27 @@ void ObtainedWebGpuDevice(WGpuDevice result, void *userData)
       ");\n"
 
       "return vec4<f32>(pos[vertexIndex], 0.0, 1.0);\n"
-    "}\n";
-
-  const char *fragmentShader =
+    "}\n"
     "@fragment\n"
-    "fn main() -> @location(0) vec4<f32> {\n"
+    "fn fmain() -> @location(0) vec4<f32> {\n"
       "return vec4<f32>(1.0, 0.5, 0.3, 1.0);\n"
     "}\n";
 
-    printf("WHATS?3\n");
 
   WGpuShaderModuleDescriptor shaderModuleDesc = {};
-  shaderModuleDesc.code = vertexShader;
-  WGpuShaderModule vs = wgpu_device_create_shader_module(device, &shaderModuleDesc);
-
-  shaderModuleDesc.code = fragmentShader;
-  WGpuShaderModule fs = wgpu_device_create_shader_module(device, &shaderModuleDesc);
+  shaderModuleDesc.code = shader;
+  WGpuShaderModule shade = wgpu_device_create_shader_module(device, &shaderModuleDesc);
 
   WGpuRenderPipelineDescriptor renderPipelineDesc = WGPU_RENDER_PIPELINE_DESCRIPTOR_DEFAULT_INITIALIZER;
-  renderPipelineDesc.vertex.module = vs;
-  renderPipelineDesc.vertex.entryPoint = "main";
-  renderPipelineDesc.fragment.module = fs;
-  renderPipelineDesc.fragment.entryPoint = "main";
+  renderPipelineDesc.vertex.module = shade;
+  renderPipelineDesc.vertex.entryPoint = "vmain";
+  renderPipelineDesc.fragment.module = shade;
+  renderPipelineDesc.fragment.entryPoint = "fmain";
 
   WGpuColorTargetState colorTarget = WGPU_COLOR_TARGET_STATE_DEFAULT_INITIALIZER;
   colorTarget.format = navigator_gpu_get_preferred_canvas_format();
   renderPipelineDesc.fragment.numTargets = 1;
   renderPipelineDesc.fragment.targets = &colorTarget;
-  printf("WHATS3?\n");
 
   renderPipeline = wgpu_device_create_render_pipeline(device, &renderPipelineDesc);
 
@@ -106,7 +97,6 @@ void ObtainedWebGpuDevice(WGpuDevice result, void *userData)
 void ObtainedWebGpuAdapter(WGpuAdapter result, void *userData)
 {
   adapter = result;
-  printf("THERE?\n");
   WGpuDeviceDescriptor deviceDesc = {};
   wgpu_adapter_request_device_async(adapter, &deviceDesc, ObtainedWebGpuDevice, 0);
 }
@@ -116,8 +106,6 @@ int main()
 {
   WGpuRequestAdapterOptions options = {};
   options.powerPreference = WGPU_POWER_PREFERENCE_LOW_POWER;
-
-  printf("HERE?\n");
 
   navigator_gpu_request_adapter_async(&options, ObtainedWebGpuAdapter, 0);
 }
