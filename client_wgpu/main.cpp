@@ -30,6 +30,8 @@ EM_BOOL raf(double time, void *userData)
 
   wgpu_queue_submit_one_and_destroy(queue, commandBuffer);
 
+  emscripten_request_animation_frame_loop(raf, 0);
+
   return EM_FALSE; // Render just one frame, static content
 }
 
@@ -45,7 +47,7 @@ EM_BOOL resizeStuff()
   canvasContext = wgpu_canvas_get_webgpu_context("canvas");
   wgpu_canvas_context_configure(canvasContext, &config);
 
-  emscripten_request_animation_frame_loop(raf, 0);
+  
 
   return 1;
 }
@@ -92,6 +94,7 @@ void ObtainedWebGpuDevice(WGpuDevice result, void *userData)
   emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, NULL, 0, (em_ui_callback_func)resizeStuff);
 
   resizeStuff();
+  emscripten_request_animation_frame_loop(raf, 0);
 }
 
 void ObtainedWebGpuAdapter(WGpuAdapter result, void *userData)
