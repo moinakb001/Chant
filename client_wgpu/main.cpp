@@ -34,20 +34,28 @@ EM_BOOL raf(double time, void *userData)
   return EM_FALSE; // Render just one frame, static content
 }
 
+EM_BOOL resizeStuff()
+{
+  WGpuCanvasConfiguration config = WGPU_CANVAS_CONFIGURATION_DEFAULT_INITIALIZER;
+  double w, h, ratio;
+  emscripten_get_element_css_size("canvas", &w, &h);
+  ratio = emscripten_get_device_pixel_ratio();
+  emscripten_set_canvas_element_size("canvas", w * ratio, h * ratio);
+  config.device = device;
+  config.format = navigator_gpu_get_preferred_canvas_format();
+  canvasContext = wgpu_canvas_get_webgpu_context("canvas");
+  wgpu_canvas_context_configure(canvasContext, &config);
+
+  emscripten_request_animation_frame_loop(raf, 0);
+
+  return 1;
+}
+
 void ObtainedWebGpuDevice(WGpuDevice result, void *userData)
 {
   printf("everywhere?\n");
   device = result;
   queue = wgpu_device_get_queue(device);
-  printf("WHATS?342\n");
-  canvasContext = wgpu_canvas_get_webgpu_context("canvas");
-
-  WGpuCanvasConfiguration config = WGPU_CANVAS_CONFIGURATION_DEFAULT_INITIALIZER;
-  config.device = device;
-  printf("WHATS?34\n");
-  config.format = navigator_gpu_get_preferred_canvas_format();
-  printf("WHATS?3s\n");
-  wgpu_canvas_context_configure(canvasContext, &config);
 
   const char *vertexShader =
     "@vertex\n"
@@ -83,16 +91,16 @@ void ObtainedWebGpuDevice(WGpuDevice result, void *userData)
   renderPipelineDesc.fragment.entryPoint = "main";
 
   WGpuColorTargetState colorTarget = WGPU_COLOR_TARGET_STATE_DEFAULT_INITIALIZER;
-  colorTarget.format = config.format;
+  colorTarget.format = navigator_gpu_get_preferred_canvas_format();
   renderPipelineDesc.fragment.numTargets = 1;
   renderPipelineDesc.fragment.targets = &colorTarget;
   printf("WHATS3?\n");
 
   renderPipeline = wgpu_device_create_render_pipeline(device, &renderPipelineDesc);
 
-  printf("WHATS?1\n");
+  emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, NULL, 0, (em_ui_callback_func)resizeStuff);
 
-  emscripten_request_animation_frame_loop(raf, 0);
+  resizeStuff();
 }
 
 void ObtainedWebGpuAdapter(WGpuAdapter result, void *userData)
