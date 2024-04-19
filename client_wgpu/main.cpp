@@ -1,121 +1,68 @@
-#include "webgpu/lib_webgpu.h"
-#include "webgpu/lib_webgpu.cpp"
-#include "webgpu/lib_webgpu_cpp20.cpp"
 #include <stdio.h>
 #include <emscripten/wasm_worker.h>
+#include "types.hpp"
+#include "render.hpp"
+#include "locking.hpp"
+
+#include "webgpu/lib_webgpu.cpp"
+#include "webgpu/lib_webgpu_cpp20.cpp"
+#include "render.cpp"
+#include "locking.cpp"
 
 
-WGpuAdapter adapter;
-WGpuCanvasContext canvasContext;
-WGpuDevice device;
-WGpuQueue queue;
-WGpuRenderPipeline renderPipeline;
+EM_JS(void, postCanvas, (int worker, char *canvas), {
+  var proxyCanvasNew = document.querySelector(UTF8ToString(canvas)).transferControlToOffscreen();
+  _wasmWorkers[worker].postMessage({
+    canvas: proxyCanvasNew
+  }, [proxyCanvasNew]);
+});
 
-EM_BOOL raf(double time, void *userData)
+void callPostCanvas()
 {
-  WGpuCommandEncoder encoder = wgpu_device_create_command_encoder(device, 0);
-
-  WGpuRenderPassColorAttachment colorAttachment = WGPU_RENDER_PASS_COLOR_ATTACHMENT_DEFAULT_INITIALIZER;
-  colorAttachment.view = wgpu_texture_create_view(wgpu_canvas_context_get_current_texture(canvasContext), 0);
-
-  WGpuRenderPassDescriptor passDesc = {};
-  passDesc.numColorAttachments = 1;
-  passDesc.colorAttachments = &colorAttachment;
-
-  WGpuRenderPassEncoder pass = wgpu_command_encoder_begin_render_pass(encoder, &passDesc);
-  wgpu_render_pass_encoder_set_pipeline(pass, renderPipeline);
-  wgpu_render_pass_encoder_draw(pass, 3, 1, 0, 0);
-  wgpu_render_pass_encoder_end(pass);
-
-  WGpuCommandBuffer commandBuffer = wgpu_command_encoder_finish(encoder);
-
-  wgpu_queue_submit_one_and_destroy(queue, commandBuffer);
-
-  emscripten_request_animation_frame_loop(raf, 0);
-
-  return EM_FALSE; // Render just one frame, static content
+  postCanvas(renderWorker, "canvas");
 }
 
-EM_BOOL resizeStuff()
+void updateCanvasMetaInternal()
 {
-  WGpuCanvasConfiguration config = WGPU_CANVAS_CONFIGURATION_DEFAULT_INITIALIZER;
-  double w, h, ratio;
-  emscripten_get_element_css_size("canvas", &w, &h);
-  ratio = emscripten_get_device_pixel_ratio();
-  emscripten_set_canvas_element_size("canvas", w * ratio, h * ratio);
-  config.device = device;
-  config.format = navigator_gpu_get_preferred_canvas_format();
-  canvasContext = wgpu_canvas_get_webgpu_context("canvas");
-  wgpu_canvas_context_configure(canvasContext, &config);
+    double ratio = emscripten_get_device_pixel_ratio();
+    renderMeta.dpi = 96.0 * ratio;
+    emscripten_get_element_css_size("canvas", &renderMeta.scrX, &renderMeta.scrY);
+    renderMeta.scrX *= ratio;
+    renderMeta.scrY *= ratio;
+}
 
+void updateCanvasMeta()
+{
+  __atomic_fetch_add((unsigned int*)&renderMeta.renderDirty, 1, __ATOMIC_RELAXED);
+  updateCanvasMetaInternal();
+  __atomic_fetch_add((unsigned int*)&renderMeta.renderDirty, 1, __ATOMIC_RELAXED);
+}
+EM_BOOL nextAnimCb(double time, void *pData);
+void animCbNotify(u32 *ptr, u32 val)
+{
+  atomicSetValueNotify(ptr, val);
   
-
-  return 1;
+  emscripten_request_animation_frame(nextAnimCb, 0);
 }
 
-void ObtainedWebGpuDevice(WGpuDevice result, void *userData)
+EM_BOOL nextAnimCb(double time, void *pData)
 {
-  device = result;
-  queue = wgpu_device_get_queue(device);
-
-  const char *shader =
-    "@vertex\n"
-    "fn vmain(@builtin(vertex_index) vertexIndex : u32) -> @builtin(position) vec4<f32> {\n"
-      "var pos = array<vec2<f32>, 3>(\n"
-        "vec2<f32>(0.0, 0.5),\n"
-        "vec2<f32>(-0.5, -0.5),\n"
-        "vec2<f32>(0.5, -0.5)\n"
-      ");\n"
-
-      "return vec4<f32>(pos[vertexIndex], 0.0, 1.0);\n"
-    "}\n"
-    "@fragment\n"
-    "fn fmain() -> @location(0) vec4<f32> {\n"
-      "return vec4<f32>(1.0, 0.5, 0.3, 1.0);\n"
-    "}\n";
-
-
-  WGpuShaderModuleDescriptor shaderModuleDesc = {};
-  shaderModuleDesc.code = shader;
-  WGpuShaderModule shade = wgpu_device_create_shader_module(device, &shaderModuleDesc);
-
-  WGpuRenderPipelineDescriptor renderPipelineDesc = WGPU_RENDER_PIPELINE_DESCRIPTOR_DEFAULT_INITIALIZER;
-  renderPipelineDesc.vertex.module = shade;
-  renderPipelineDesc.vertex.entryPoint = "vmain";
-  renderPipelineDesc.fragment.module = shade;
-  renderPipelineDesc.fragment.entryPoint = "fmain";
-
-  WGpuColorTargetState colorTarget = WGPU_COLOR_TARGET_STATE_DEFAULT_INITIALIZER;
-  colorTarget.format = navigator_gpu_get_preferred_canvas_format();
-  renderPipelineDesc.fragment.numTargets = 1;
-  renderPipelineDesc.fragment.targets = &colorTarget;
-
-  renderPipeline = wgpu_device_create_render_pipeline(device, &renderPipelineDesc);
-
-  emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, NULL, 0, (em_ui_callback_func)resizeStuff);
-
-  resizeStuff();
-  emscripten_request_animation_frame_loop(raf, 0);
-}
-
-void ObtainedWebGpuAdapter(WGpuAdapter result, void *userData)
-{
-  adapter = result;
-  WGpuDeviceDescriptor deviceDesc = {};
-  wgpu_adapter_request_device_async(adapter, &deviceDesc, ObtainedWebGpuDevice, 0);
-}
-void doStuff()
-{
-  printf("what the fuck\n");
+  //printf("waiting for ack\n", );
+  waitUntilValAsync<animCbNotify>(&curFrameIdx, renderMeta.frameIdx, &renderMeta.frameIdx, renderMeta.frameIdx + 1);
+  return false;
 }
 
 extern "C"
 int main()
 {
-  WGpuRequestAdapterOptions options = {};
-  options.powerPreference = WGPU_POWER_PREFERENCE_LOW_POWER;
-
-  navigator_gpu_request_adapter_async(&options, ObtainedWebGpuAdapter, 0);
+    renderState = 0;
+    renderMeta = {};
+    updateCanvasMeta();
+    emscripten_request_animation_frame(nextAnimCb, 0);
+    emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, 0, true, (em_ui_callback_func)updateCanvasMeta);
   auto worker = emscripten_malloc_wasm_worker(4096);
-  emscripten_wasm_worker_post_function_v(worker, doStuff);
+  renderWorker = worker;
+  emscripten_wasm_worker_post_function_v(worker, renderMain);
+  //nextStep();
+  waitUntilValAsync<callPostCanvas>(&renderState, 1);
 }

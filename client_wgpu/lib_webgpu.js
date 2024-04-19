@@ -203,14 +203,7 @@ let api = {
   wgpu_canvas_get_webgpu_context: function(canvasSelector) {
     {{{ wdebuglog('`wgpu_canvas_get_webgpu_context(canvasSelector=${UTF8ToString(canvasSelector)})`'); }}}
     return wgpuStore(
-      debugDir(
-        debugDir(
-          document.querySelector(UTF8ToString(canvasSelector)),
-          'canvas'
-        )
-        .getContext('webgpu'),
-        'canvas.getContext("webgpu")'
-      )
+      self.globalOffscreen.getContext('webgpu')
     );
   },
 
@@ -336,7 +329,7 @@ let api = {
     {{{ wassert('config % 4 == 0'); }}} // Must be aligned at uint32_t boundary
 
     {{{ ptrToIdx('config', 2); }}}
-    wgpu[canvasContext]['configure'](
+    console.log(wgpu[canvasContext]['configure'](
       debugDir(
         {
           'device': wgpu[HEAPU32[config]],
@@ -348,7 +341,7 @@ let api = {
         },
         'canvasContext.configure() with config'
       )
-    );
+    ));
   },
 
   wgpu_canvas_context_get_current_texture__deps: ['wgpu_object_destroy'],
@@ -363,7 +356,8 @@ let api = {
     // accumulating references to stale textures from each frame.
 
     // Acquire the new canvas context texture..
-    canvasContext = wgpu[canvasContext]['getCurrentTexture']();
+    canvasContext = wgpu[canvasContext].getCurrentTexture();
+    
     {{{ wassert('canvasContext'); }}}
     // The browser implementation for getCurrentTexture() should always return a new texture for each frame, so
     // derivedObjects array should not have a chance to pile up (a lot of) derived views. It is observed that
