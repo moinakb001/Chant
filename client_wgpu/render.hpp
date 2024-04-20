@@ -4,9 +4,12 @@
 
 struct CanvasMeta
 {
-    double scrX;
-    double scrY;
+    vec2d screenDims;
+    vec2d cssDims;
+    vec2d offsInches;
     double dpi;
+    double scale;
+    u32 scrollDirty;
     u32 renderDirty;
     u32 frameIdx;
 };

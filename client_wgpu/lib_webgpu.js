@@ -329,7 +329,7 @@ let api = {
     {{{ wassert('config % 4 == 0'); }}} // Must be aligned at uint32_t boundary
 
     {{{ ptrToIdx('config', 2); }}}
-    console.log(wgpu[canvasContext]['configure'](
+    wgpu[canvasContext]['configure'](
       debugDir(
         {
           'device': wgpu[HEAPU32[config]],
@@ -341,7 +341,7 @@ let api = {
         },
         'canvasContext.configure() with config'
       )
-    ));
+    );
   },
 
   wgpu_canvas_context_get_current_texture__deps: ['wgpu_object_destroy'],
