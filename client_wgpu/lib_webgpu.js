@@ -1269,7 +1269,7 @@ let api = {
       wgpu[device]
     );
   },
-
+  $wgpuPipelineCreationFailed__deps: ['$stringToNewUTF8'],
   $wgpuPipelineCreationFailed: function(device, error, userData) {
     {{{ wdebuglog('`createComputePipelineAsync failed with error:`'); }}}
     {{{ wdebugdir('error'); }}}

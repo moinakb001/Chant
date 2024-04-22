@@ -11,39 +11,46 @@
 #include "math.h"
 
 
-EM_JS(void, postCanvas, (int worker, char *canvas), {
+EM_JS(void, postCanvas, (int worker, const char *canvas), {
   var proxyCanvasNew = document.querySelector(UTF8ToString(canvas)).transferControlToOffscreen();
   _wasmWorkers[worker].postMessage({
     canvas: proxyCanvasNew
   }, [proxyCanvasNew]);
 });
 
-void callPostCanvas()
-{
-  postCanvas(renderWorker, "canvas");
-}
-
-void updateCanvasMetaInternal()
-{
-    double ratio = emscripten_get_device_pixel_ratio();
-    renderMeta.dpi = 96.0 * ratio;
-    emscripten_get_element_css_size("canvas", &renderMeta.cssDims[0],  &renderMeta.cssDims[1]);
-    renderMeta.screenDims = renderMeta.cssDims * ratio;
-}
 EM_BOOL wheelEvt(int eventType, const EmscriptenWheelEvent *wheelEvent, void *userData)
 {
+  //printf("%u %f %f\n", wheelEvent->mouse.ctrlKey, -wheelEvent->deltaX, wheelEvent->deltaY);
+  if (!wheelEvent->mouse.ctrlKey)
+  {
     __atomic_fetch_add((unsigned int*)&renderMeta.scrollDirty, 1, __ATOMIC_RELAXED);
     vec2d toAdd = vec2d{(f64)-wheelEvent->deltaX,(f64)wheelEvent->deltaY };
     renderMeta.offsInches += toAdd / 96.0 / renderMeta.scale;
+    renderMeta.isTouch = false;
     __atomic_fetch_add((unsigned int*)&renderMeta.scrollDirty, 1, __ATOMIC_RELAXED);
+  }
+  else
+  {
+    f64 mulv = pow(2.0, - wheelEvent->deltaY  / 96.0 );
+    __atomic_fetch_add((unsigned int*)&renderMeta.scrollDirty, 1, __ATOMIC_RELAXED);
+    renderMeta.scale *= mulv;
+    renderMeta.isTouch = false;
+    __atomic_fetch_add((unsigned int*)&renderMeta.scrollDirty, 1, __ATOMIC_RELAXED);
+  }
   return true;
 }
 
 void updateCanvasMeta()
 {
-  __atomic_fetch_add((unsigned int*)&renderMeta.renderDirty, 1, __ATOMIC_RELAXED);
-  updateCanvasMetaInternal();
-  __atomic_fetch_add((unsigned int*)&renderMeta.renderDirty, 1, __ATOMIC_RELAXED);
+    double ratio = emscripten_get_device_pixel_ratio();
+    double cssX, cssY;
+    emscripten_get_element_css_size("canvas", &cssX,  &cssY);
+    __atomic_fetch_add((unsigned int*)&renderMeta.renderDirty, 1, __ATOMIC_RELAXED);
+    renderMeta.dpi = 96.0 * ratio;
+    renderMeta.cssDims = vec2d{cssX, cssY};
+    renderMeta.screenInches = renderMeta.cssDims / 96.0;
+    renderMeta.screenDims = renderMeta.cssDims * ratio;
+    __atomic_fetch_add((unsigned int*)&renderMeta.renderDirty, 1, __ATOMIC_RELAXED);
 }
 
 
@@ -123,7 +130,7 @@ EM_BOOL consumeTouch(int eventType, const EmscriptenTouchEvent *touchEvent, void
       }
       auto fCenter = getBarycenter(pts, tCtx.numTouches);
       auto oCenter = getBarycenter(opts, tCtx.numTouches);
-      auto diff = (oCenter - fCenter) / 96.0 / renderMeta.scale;
+      auto diff = (oCenter - fCenter) / 96.0  /  renderMeta.scale;
       
 
 
@@ -141,6 +148,7 @@ EM_BOOL consumeTouch(int eventType, const EmscriptenTouchEvent *touchEvent, void
       __atomic_fetch_add((unsigned int*)&renderMeta.scrollDirty, 1, __ATOMIC_RELAXED);
     renderMeta.offsInches += diff;
     renderMeta.scale = scale;
+    renderMeta.isTouch = true;
     __atomic_fetch_add((unsigned int*)&renderMeta.scrollDirty, 1, __ATOMIC_RELAXED);
     break;
     }
@@ -174,19 +182,9 @@ EM_BOOL consumeTouch(int eventType, const EmscriptenTouchEvent *touchEvent, void
   return true;
 }
 
-
-EM_BOOL nextAnimCb(double time, void *pData)
-{
-  atomicSetValueNotify(&renderMeta.frameIdx, renderMeta.frameIdx + 1);
-  
-  emscripten_request_animation_frame(nextAnimCb, 0);
-  return false;
-}
-
 EM_JS(void, exitIncompatible, (), {
-  document.querySelector("body").innerHTML="Please use a WebGPU-compatible browser.";
+    document.querySelector("body").innerHTML="Please use a WebGPU-compatible browser.";
 });
-
 extern "C"
 int main()
 {
@@ -199,16 +197,15 @@ int main()
       return -1;
     }
     updateCanvasMeta();
-    emscripten_request_animation_frame(nextAnimCb, 0);
     emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, 0, true, (em_ui_callback_func)updateCanvasMeta);
     emscripten_set_wheel_callback("canvas", 0, true, wheelEvt);
     emscripten_set_touchstart_callback("canvas", 0, true, consumeTouch);
     emscripten_set_touchend_callback("canvas", 0, true, consumeTouch);
     emscripten_set_touchmove_callback("canvas", 0, true, consumeTouch);
     emscripten_set_touchcancel_callback("canvas", 0, true, consumeTouch);
-  auto worker = emscripten_malloc_wasm_worker(4096);
-  renderWorker = worker;
-  emscripten_wasm_worker_post_function_v(worker, renderMain);
-  //nextStep();
-  waitUntilValAsync<callPostCanvas>(&renderState, 1);
+    auto worker = emscripten_malloc_wasm_worker(4096);
+    renderWorker = worker;
+    emscripten_wasm_worker_post_function_v(worker, renderMain);
+    waitUntilValAsync<postCanvas>(&renderState, 1, renderWorker, "canvas");
+    return 0;
 }

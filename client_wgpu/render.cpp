@@ -10,23 +10,46 @@ EM_JS(void, setOffscreenSize, (int width, int height), {
 });
 
 const char *pShader =
-    "@group(0) @binding(0) var<uniform> offs : vec3f;\n"
-    "@vertex\n"
-    "fn vmain(@builtin(vertex_index) vertexIndex : u32) -> @builtin(position) vec4<f32> {\n"
-      "var pos = array<vec2<f32>, 3>(\n"
-        "vec2<f32>(0.0, 0.5),\n"
-        "vec2<f32>(-0.5, -0.5),\n"
-        "vec2<f32>(0.5, -0.5)\n"
-      ");\n"
+R"(
+    struct scaleInfo {
+        offset : vec2<f32>,
+        screenInches : vec2<f32>,
+        scale : f32,
+    };
+    struct vertOut {
+        @builtin(position) pos: vec4<f32>,
+        @location(0) color: vec4<f32>,
+    };
+    @group(0) @binding(0) var<uniform> offs : scaleInfo;
+    @vertex
+    fn vmain(@builtin(vertex_index) vertexIndex : u32) -> vertOut {
+        var out: vertOut;
+        var pos = array<vec2<f32>, 6>(
+            vec2<f32>(-0.5, 0.5),
+            vec2<f32>(-0.5, -0.5),
+            vec2<f32>(0.5, -0.5),
+            vec2<f32>(0.5, -0.5),
+            vec2<f32>(0.5, 0.5),
+            vec2<f32>(-0.5, 0.5)
+        );
+        var cPosScaled = pos[vertexIndex] + 0.5;
+        out.pos = vec4<f32>((pos[vertexIndex] * 2.0 + 2.0 * offs.offset) * offs.scale / offs.screenInches, 0.0, 1.0);
+        out.color = vec4<f32>(cPosScaled, cPosScaled.x * cPosScaled.y ,1.0);
+        return out;
+    }
+    @fragment
+    fn fmain(inp: vertOut) -> @location(0) vec4<f32> {
+        return inp.color;
+    }
+)";
 
-      "return vec4<f32>((pos[vertexIndex] + offs.xy * 2.0) * offs.z, 0.0, 1.0);\n"
-    "}\n"
-    "@fragment\n"
-    "fn fmain() -> @location(0) vec4<f32> {\n"
-      "return vec4<f32>(1.0, 0.5, 0.3, 1.0);\n"
-    "}\n";
+scaleInfo cur = {vec2f{}, vec2f{}, 1.f};
+
 u32 highestSeen = 1;
 u32 lastScroll = 1;
+vec2f lastVelocity{};
+vec2f lastPosition{};
+vec2f addedOffset{};
 typedef EM_BOOL (*rafCbFn)(double time, void *userData);
 
 void renderCreateSwapChain(renderCtx *pCtx)
@@ -36,13 +59,19 @@ void renderCreateSwapChain(renderCtx *pCtx)
     config.format = pCtx->texFmt;
     wgpu_canvas_context_configure(pCtx->canvasCtx, &config);
 }
-float cur[3] = {0.f, 0.f, 1.f};
+
 void wscb(WGpuQueue queue, void *userData);
 f64 last = 0.0;
+constexpr f64 touchDecel = 2.0;
+constexpr f64 wheelDecel = 1000.0;
 
 b renderFrame(f64 now, renderCtx *pCtx)
 {
     b isDirty = false;
+    auto delta = now - last;
+    last = now;
+    auto fps = 1000.0/delta;
+    emscripten_request_animation_frame((rafCbFn)renderFrame, pCtx);
     {
         CanvasMeta local;
         u32 next =__atomic_load_n((unsigned int*)&renderMeta.renderDirty, __ATOMIC_RELAXED);
@@ -57,6 +86,7 @@ b renderFrame(f64 now, renderCtx *pCtx)
             highestSeen = prev;
             setOffscreenSize(local.screenDims[0], local.screenDims[1]);
             renderCreateSwapChain(pCtx);
+            cur.screenInches = vec2f{(f32)local.screenInches[0], (f32)local.screenInches[1]};
             isDirty = true;
         }
     }
@@ -69,23 +99,39 @@ b renderFrame(f64 now, renderCtx *pCtx)
             local = renderMeta;
             next = __atomic_load_n((unsigned int*)&renderMeta.scrollDirty, __ATOMIC_RELAXED);
         } while(prev != next && (prev & 1));
+        cur.offset = vec2f{(f32)local.offsInches[0], (f32)local.offsInches[1]};
+        cur.scale = local.scale;
         if(prev != lastScroll)
         {
             lastScroll = prev;
             isDirty = true;
+            lastVelocity = (cur.offset - lastPosition) / delta;
         }
-        auto inScreen = local.offsInches * local.dpi / local.screenDims;
-        cur[0] = inScreen[0];
-        cur[1] = inScreen[1];
-        cur[2] = local.scale;
+        else
+        {
+            constexpr f64 eps =  0.0000001;
+            auto scaleSquared = local.scale * local.scale;
+            if(smag(lastVelocity) < (eps * scaleSquared)) lastVelocity = vec2f{};
+            else
+            {
+                f64 factor = local.isTouch ? touchDecel : wheelDecel;
+                isDirty = true;
+                addedOffset += lastVelocity * delta;
+                lastVelocity *=  exp(- factor * (delta / 1000.f));
+            }
+            
+        }
+        lastPosition = cur.offset;
+        cur.offset += addedOffset;
+        
     }
     if(!isDirty) {
-        emscripten_request_animation_frame((rafCbFn)renderFrame, pCtx);
         return true;
     }
-    auto delta = now - last;
-    last = now;
-    //printf("fps %f\n", 1000.0/delta);
+    
+    if(fps < 50.0) printf("fps %f\n", fps);
+    
+    if(pCtx->canvasView != 0) wgpu_object_destroy(pCtx->canvasView);
     pCtx->canvasView = wgpu_canvas_context_get_current_texture_view(pCtx->canvasCtx);
     WGpuCommandEncoder encoder = wgpu_device_create_command_encoder(pCtx->device, 0);
     WGpuRenderPassColorAttachment colorAttachment = WGPU_RENDER_PASS_COLOR_ATTACHMENT_DEFAULT_INITIALIZER;
@@ -96,46 +142,30 @@ b renderFrame(f64 now, renderCtx *pCtx)
   passDesc.numColorAttachments = 1;
   passDesc.colorAttachments = &colorAttachment;
 
-  wgpu_queue_write_buffer(pCtx->queue, pCtx->offsBuffer, 0, cur, 12);
+  wgpu_queue_write_buffer(pCtx->queue, pCtx->offsBuffer, 0, &cur, sizeof(scaleInfo));
     
   WGpuRenderPassEncoder pass = wgpu_command_encoder_begin_render_pass(encoder, &passDesc);
   wgpu_render_pass_encoder_set_pipeline(pass, pCtx->renderPipeline);
   wgpu_render_pass_encoder_set_bind_group(pass, 0, pCtx->bindGroup, 0, 0);
-  wgpu_render_pass_encoder_draw(pass, 3, 1, 0, 0);
+  wgpu_render_pass_encoder_draw(pass, 6, 1, 0, 0);
   wgpu_render_pass_encoder_end(pass);
 
   WGpuCommandBuffer commandBuffer = wgpu_command_encoder_finish(encoder);
   wgpu_queue_submit_one_and_destroy(pCtx->queue, commandBuffer);
 
-  wgpu_queue_set_on_submitted_work_done_callback(pCtx->queue, wscb, pCtx);
+  //wgpu_queue_set_on_submitted_work_done_callback(pCtx->queue, wscb, pCtx);
+  //emscripten_request_animation_frame((rafCbFn)renderFrame, pCtx);
 
   return false; // Render just one frame, static content
 }
-u32 curFrameIdx = 0;
 
-void renderAnimLoop(renderCtx *pCtx)
-{
-    while(1)
-    {
-        u32 oldFrame = curFrameIdx;
-        u32 newFrame = __atomic_load_n((unsigned int *)&renderMeta.frameIdx, __ATOMIC_RELAXED);
-        if(oldFrame != newFrame)
-        {
-            b val = renderFrame(emscripten_get_now(), pCtx);
-            curFrameIdx = newFrame;
-            if(!val) return;
-        }
-        __builtin_wasm_memory_atomic_wait32((int *)&renderMeta.frameIdx, curFrameIdx, (u32) -1);
-
-    }
-}
 void wscb(WGpuQueue queue, void *userData)
 {
     auto pCtx = (renderCtx*)userData;
-    wgpu_object_destroy(pCtx->canvasView);
-    emscripten_request_animation_frame((rafCbFn)renderFrame, pCtx);
+    //wgpu_object_destroy(pCtx->canvasView);
+    //emscripten_request_animation_frame((rafCbFn)renderFrame, pCtx);
+    renderFrame(emscripten_get_now(), pCtx);
     return;
-    renderAnimLoop((renderCtx*)pCtx);
 }
 
 
@@ -152,7 +182,6 @@ void renderInitDone(WGpuDevice device, WGpuPipelineBase pipeline, renderCtx *pCt
     renderCreateSwapChain(pCtx);
     emscripten_request_animation_frame((rafCbFn)renderFrame, pCtx);
     return;
-    renderAnimLoop(pCtx);
 }
 
 void renderPipelineInit(WGpuDevice result, renderCtx *pCtx)
@@ -161,7 +190,7 @@ void renderPipelineInit(WGpuDevice result, renderCtx *pCtx)
     pCtx->queue = wgpu_device_get_queue(pCtx->device);
     {
         WGpuBufferDescriptor desc;
-        desc.size = 12;
+        desc.size = sizeof(scaleInfo);
         desc.usage = WGPU_BUFFER_USAGE_UNIFORM | WGPU_BUFFER_USAGE_COPY_DST;
         desc.mappedAtCreation = false;
         pCtx->offsBuffer = wgpu_device_create_buffer(pCtx->device, &desc);
