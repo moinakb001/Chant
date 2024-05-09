@@ -99,7 +99,7 @@ EM_BOOL renderFrame(f64 now, renderCtx *pCtx)
     tot += delta;
     num += 1.0;
     vec2d allDelta{};
-    b touchMoved = false, scrollMoved = false;
+    b touchMoved = false;
     b inGotten = false;
 
     numDropped += (fps < 50.0);
@@ -114,7 +114,7 @@ EM_BOOL renderFrame(f64 now, renderCtx *pCtx)
         auto evt = inputIterGet(iter);
         if(evt.type == InputEventType::Scroll)
         {
-            scrollMoved = true;
+            inGotten = true;
             allDelta += vec2d{(f32)-evt.pos[0], (f32)evt.pos[1]} / cur.scale;
         }
         else if (evt.type == InputEventType::Zoom)
@@ -173,6 +173,7 @@ foundx:
             cur.scale *= magDiff;
             delta /= cur.scale;
             touchPos[idx] = evt.pos;
+            inGotten = true;
             touchMoved = true;
             allDelta += vec2d{(f32)delta[0], (f32)-delta[1]};
         }
@@ -180,32 +181,20 @@ foundx:
 end:
         iter = inputIterAdvance(iter);
     }
-    inGotten = touchMoved || scrollMoved;
-    b newCond = !touchMoved;
-    b newUseDelta = useDelta && (!scrollMoved) && ((touchNum == 0) ||((now - lastDebounce) < 50.0));
-    if (touchMoved && !scrollMoved && useDelta && (smag(lastDelta)/10.0) >= smag(allDelta))
-    {
-        allDelta = vec2d{};
-        touchMoved = false;
-        inGotten = touchMoved || scrollMoved;
-        newCond = true;
-    }
-    else if(touchMoved)
-    {
-        useDelta = true;
-        lastDebounce = now;
-        lastDelta = allDelta / delta;
-    }
-    newUseDelta = newUseDelta && newCond;
-    if(newUseDelta && touchNum == 0)
+    useDelta = useDelta && (!inGotten) && ((touchNum == 0) ||((now - lastDebounce) < 100.0));
+    if(useDelta && touchNum == 0)
     {
         isDirty = true;
         allDelta = lastDelta * delta;
         lastDelta *= pow(2, -delta / 300.0);
         if(smag(lastDelta) < epsilon) useDelta = false;
     }
-    
-    useDelta = newUseDelta;
+    if(touchMoved)
+    {
+        useDelta = true;
+        lastDebounce = now;
+        lastDelta = allDelta / delta;
+    }
     
     
     {
