@@ -40,14 +40,27 @@ struct buf_t
     }
 };
 
+
 template<typename T, usize num>
 struct vec_t
 {
     T arr[num];
+    
     inline T& operator[](usize right)
     {
         return arr[right];
     }
+    template<typename O>
+    inline vec_t<O, num> operator()()
+    {
+        vec_t<O, num> arr{};
+        for(usize i = 0; i < num; i++)
+        {
+            arr[i] = (T) this[i];
+        }
+        return arr;
+    }
+
     // vector binary
     inline vec_t<T, num> operator*(vec_t<T, num> a)
     {

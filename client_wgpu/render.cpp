@@ -35,6 +35,7 @@ R"(
         var cPosScaled = pos[vertexIndex] + 0.5;
         out.pos = vec4<f32>((pos[vertexIndex] * 2.0 + 2.0 * offs.offset) * offs.scale / offs.screenInches, 0.0, 1.0);
         out.color = vec4<f32>(cPosScaled, cPosScaled.x * cPosScaled.y ,1.0);
+        //out.color = vec4<f32>(1.0);
         return out;
     }
     @fragment
@@ -46,129 +47,212 @@ R"(
 scaleInfo cur = {vec2f{}, vec2f{}, 1.f};
 
 u32 highestSeen = 1;
-u32 lastScroll = 1;
-vec2f lastVelocity{};
-vec2f lastPosition{};
-vec2f addedOffset{};
 typedef EM_BOOL (*rafCbFn)(double time, void *userData);
+
+void lostcb(WGpuDevice device, WGPU_DEVICE_LOST_REASON deviceLostReason, const char *message NOTNULL, void *userData)
+{
+    printf("%s\n", message);
+}
 
 void renderCreateSwapChain(renderCtx *pCtx)
 {
     WGpuCanvasConfiguration config = WGPU_CANVAS_CONFIGURATION_DEFAULT_INITIALIZER;
     config.device = pCtx->device;
     config.format = pCtx->texFmt;
+    pCtx->canvasCtx = wgpu_canvas_get_webgpu_context("");
     wgpu_canvas_context_configure(pCtx->canvasCtx, &config);
 }
+EM_BOOL renderFrame(f64 now, renderCtx *pCtx);
 
-void wscb(WGpuQueue queue, void *userData);
+f64 sub;
+
+void wscb(WGpuQueue queue, void *userData)
+{
+    //printf("delta %f\n", now - sub);
+    //renderFrame(0.0, (renderCtx *) userData);
+    return;
+}
 f64 last = 0.0;
 constexpr f64 touchDecel = 2.0;
 constexpr f64 wheelDecel = 1000.0;
+b lastDirty = false;
+u32 numDropped = 0;
+f64 tot = 0.0;
+f64 num = 0.0;
 
-b renderFrame(f64 now, renderCtx *pCtx)
+vec2d touchPos[32];
+u32 touchId[32];
+vec2d touchCenter{};
+usize touchNum = 0;
+vec2d lastDelta{};
+f64 lastDebounce = 0.0;
+b useDelta = false;
+#define epsilon 0.001
+
+EM_BOOL renderFrame(f64 now, renderCtx *pCtx)
 {
+    now = emscripten_performance_now();
     b isDirty = false;
     auto delta = now - last;
     last = now;
     auto fps = 1000.0/delta;
-    emscripten_request_animation_frame((rafCbFn)renderFrame, pCtx);
+    tot += delta;
+    num += 1.0;
+    vec2d allDelta{};
+    b touchMoved = false, scrollMoved = false;
+    b inGotten = false;
+
+    numDropped += (fps < 50.0);
+    if(numDropped % 60 == 0)
+    {
+        numDropped++;
+        printf("fps %f %u %f\n", fps, numDropped, 1000 * num / tot);
+    }
+    auto iter = inputIter(&globalInput);
+    while(!inputIterFlush(iter))
+    {
+        auto evt = inputIterGet(iter);
+        if(evt.type == InputEventType::Scroll)
+        {
+            scrollMoved = true;
+            allDelta += vec2d{(f32)-evt.pos[0], (f32)evt.pos[1]} / cur.scale;
+        }
+        else if (evt.type == InputEventType::Zoom)
+        {
+            // An inch gives 2x magnification
+            cur.scale *= pow(2.0, -evt.pos[1]);
+        }
+        else if(evt.type == InputEventType::TouchBegin)
+        {
+            if(touchNum == 32) goto end;
+            touchCenter = (touchCenter * ((f64)touchNum))  + evt.pos;
+            touchPos[touchNum] =  evt.pos;
+            touchId[touchNum] = evt.identifier;
+            touchNum++;
+            touchCenter /= ((f64)touchNum);
+        }
+        else if(evt.type == InputEventType::TouchEnd)
+        {
+            u32 idx;
+            for(idx = 0; idx < touchNum; idx++)
+            {
+                if(touchId[idx] == evt.identifier)
+                {
+                    goto found;
+                }
+            }
+            goto end;
+found:
+            touchCenter = (touchCenter * ((f64)touchNum))  - evt.pos;
+            touchNum--;
+            touchId[idx] = touchId[touchNum];
+            touchPos[idx] = touchPos[touchNum];
+            if(touchNum != 0) touchCenter /= ((f64)touchNum);
+        }
+        else if(evt.type == InputEventType::TouchMove)
+        {
+            u32 idx;
+            vec2d newPos, delta;
+            vec2d covtd = vec2d{cur.offset[0], -cur.offset[1]};
+            f64 magDiff;
+            for(idx = 0; idx < touchNum; idx++)
+            {
+                if(touchId[idx] == evt.identifier)
+                {
+                    goto foundx;
+                }
+            }
+            goto end;
+foundx:
+            newPos = (touchCenter * ((f64)touchNum))  - touchPos[idx] + evt.pos;
+            newPos /= ((f64)touchNum);
+            magDiff = (smag(newPos-evt.pos) + epsilon) / (smag(touchCenter - touchPos[idx]) + epsilon);
+            magDiff = sqrt(magDiff);
+            delta = (newPos) - (touchCenter);
+            touchCenter = newPos;
+            cur.scale *= magDiff;
+            delta /= cur.scale;
+            touchPos[idx] = evt.pos;
+            touchMoved = true;
+            allDelta += vec2d{(f32)delta[0], (f32)-delta[1]};
+        }
+        isDirty = true;
+end:
+        iter = inputIterAdvance(iter);
+    }
+    inGotten = touchMoved || scrollMoved;
+    b newCond = !touchMoved;
+    b newUseDelta = useDelta && (!scrollMoved) && ((touchNum == 0) ||((now - lastDebounce) < 50.0));
+    if (touchMoved && !scrollMoved && useDelta && (smag(lastDelta)/10.0) >= smag(allDelta))
+    {
+        allDelta = vec2d{};
+        touchMoved = false;
+        inGotten = touchMoved || scrollMoved;
+        newCond = true;
+    }
+    else if(touchMoved)
+    {
+        useDelta = true;
+        lastDebounce = now;
+        lastDelta = allDelta / delta;
+    }
+    newUseDelta = newUseDelta && newCond;
+    if(newUseDelta && touchNum == 0)
+    {
+        isDirty = true;
+        allDelta = lastDelta * delta;
+        lastDelta *= pow(2, -delta / 300.0);
+        if(smag(lastDelta) < epsilon) useDelta = false;
+    }
+    
+    useDelta = newUseDelta;
+    
+    
     {
         CanvasMeta local;
         u32 next =__atomic_load_n((unsigned int*)&renderMeta.renderDirty, __ATOMIC_RELAXED);
+        if(next == highestSeen) goto loopDone;
         u32 prev = 0;
         do{
             prev = next;
             local = renderMeta;
             next = __atomic_load_n((unsigned int*)&renderMeta.renderDirty, __ATOMIC_RELAXED);
         } while(prev != next && (prev & 1));
-        if(prev != highestSeen)
-        {
-            highestSeen = prev;
-            setOffscreenSize(local.screenDims[0], local.screenDims[1]);
-            renderCreateSwapChain(pCtx);
-            cur.screenInches = vec2f{(f32)local.screenInches[0], (f32)local.screenInches[1]};
-            isDirty = true;
-        }
+        highestSeen = prev;
+        setOffscreenSize(local.screenDims[0], local.screenDims[1]);
+        auto inc = local.screenDims / local.dpi;
+        cur.screenInches = vec2f{(f32)inc[0], (f32)inc[1]};
+        isDirty = true;
     }
-    {
-        CanvasMeta local;
-        u32 next =__atomic_load_n((unsigned int*)&renderMeta.scrollDirty, __ATOMIC_RELAXED);
-        u32 prev = 0;
-        do{
-            prev = next;
-            local = renderMeta;
-            next = __atomic_load_n((unsigned int*)&renderMeta.scrollDirty, __ATOMIC_RELAXED);
-        } while(prev != next && (prev & 1));
-        cur.offset = vec2f{(f32)local.offsInches[0], (f32)local.offsInches[1]};
-        cur.scale = local.scale;
-        if(prev != lastScroll)
-        {
-            lastScroll = prev;
-            isDirty = true;
-            lastVelocity = (cur.offset - lastPosition) / delta;
-        }
-        else
-        {
-            constexpr f64 eps =  0.0000001;
-            auto scaleSquared = local.scale * local.scale;
-            if(smag(lastVelocity) < (eps * scaleSquared)) lastVelocity = vec2f{};
-            else
-            {
-                f64 factor = local.isTouch ? touchDecel : wheelDecel;
-                isDirty = true;
-                addedOffset += lastVelocity * delta;
-                lastVelocity *=  exp(- factor * (delta / 1000.f));
-            }
-            
-        }
-        lastPosition = cur.offset;
-        cur.offset += addedOffset;
-        
-    }
+loopDone:
+    
+
     if(!isDirty) {
+        lastDirty = isDirty;
         return true;
     }
-    
-    if(fps < 50.0) printf("fps %f\n", fps);
-    
-    if(pCtx->canvasView != 0) wgpu_object_destroy(pCtx->canvasView);
-    pCtx->canvasView = wgpu_canvas_context_get_current_texture_view(pCtx->canvasCtx);
+    cur.offset += vec2f{(f32)allDelta[0], (f32)allDelta[1]};
+
+    lastDirty = isDirty;
     WGpuCommandEncoder encoder = wgpu_device_create_command_encoder(pCtx->device, 0);
     WGpuRenderPassColorAttachment colorAttachment = WGPU_RENDER_PASS_COLOR_ATTACHMENT_DEFAULT_INITIALIZER;
+    colorAttachment.loadOp = WGPU_LOAD_OP_CLEAR;
+    colorAttachment.view = wgpu_canvas_context_get_current_texture_view(pCtx->canvasCtx);
 
-  colorAttachment.view = pCtx->canvasView;
+    WGpuRenderPassDescriptor passDesc = WGPU_RENDER_PASS_DESCRIPTOR_DEFAULT_INITIALIZER;
+    passDesc.numColorAttachments = 1;
+    passDesc.colorAttachments = &colorAttachment;
 
-  WGpuRenderPassDescriptor passDesc = {};
-  passDesc.numColorAttachments = 1;
-  passDesc.colorAttachments = &colorAttachment;
+    wgpu_queue_write_buffer(pCtx->queue, pCtx->offsBuffer, 0, &cur, sizeof(scaleInfo));
+    WGpuRenderPassEncoder pass = wgpu_command_encoder_begin_render_pass(encoder, &passDesc);
+    wgpu_render_pass_encoder_execute_bundles(pass, &pCtx->bundle, 1);
+    wgpu_render_pass_encoder_end(pass);
+    WGpuCommandBuffer commandBuffer = wgpu_command_encoder_finish(encoder);
+    wgpu_queue_submit_one_and_destroy(pCtx->queue, commandBuffer);
+    return true;
 
-  wgpu_queue_write_buffer(pCtx->queue, pCtx->offsBuffer, 0, &cur, sizeof(scaleInfo));
     
-  WGpuRenderPassEncoder pass = wgpu_command_encoder_begin_render_pass(encoder, &passDesc);
-  wgpu_render_pass_encoder_set_pipeline(pass, pCtx->renderPipeline);
-  wgpu_render_pass_encoder_set_bind_group(pass, 0, pCtx->bindGroup, 0, 0);
-  wgpu_render_pass_encoder_draw(pass, 6, 1, 0, 0);
-  wgpu_render_pass_encoder_end(pass);
-
-  WGpuCommandBuffer commandBuffer = wgpu_command_encoder_finish(encoder);
-  wgpu_queue_submit_one_and_destroy(pCtx->queue, commandBuffer);
-
-  //wgpu_queue_set_on_submitted_work_done_callback(pCtx->queue, wscb, pCtx);
-  //emscripten_request_animation_frame((rafCbFn)renderFrame, pCtx);
-
-  return false; // Render just one frame, static content
 }
-
-void wscb(WGpuQueue queue, void *userData)
-{
-    auto pCtx = (renderCtx*)userData;
-    //wgpu_object_destroy(pCtx->canvasView);
-    //emscripten_request_animation_frame((rafCbFn)renderFrame, pCtx);
-    renderFrame(emscripten_get_now(), pCtx);
-    return;
-}
-
-
 void renderInitDone(WGpuDevice device, WGpuPipelineBase pipeline, renderCtx *pCtx)
 {
     pCtx->renderPipeline = pipeline;
@@ -177,17 +261,31 @@ void renderInitDone(WGpuDevice device, WGpuPipelineBase pipeline, renderCtx *pCt
         WGpuBindGroupEntry entry{};
         entry.binding = 0;
         entry.resource = pCtx->offsBuffer;
-        pCtx->bindGroup = wgpu_device_create_bind_group(pCtx->device, pCtx->renderLayout, &entry, 1);
+        pCtx->bindGroup =    wgpu_device_create_bind_group(pCtx->device, pCtx->renderLayout, &entry, 1);
     }
-    renderCreateSwapChain(pCtx);
-    emscripten_request_animation_frame((rafCbFn)renderFrame, pCtx);
+    {
+        WGpuRenderBundleEncoderDescriptor desc = {};
+        desc.numColorFormats = 1;
+        desc.colorFormats = &pCtx->texFmt;
+        desc.sampleCount = 1;
+        auto enc = wgpu_device_create_render_bundle_encoder(pCtx->device, &desc);
+        wgpu_render_bundle_encoder_set_pipeline(enc, pCtx->renderPipeline);
+        wgpu_render_bundle_encoder_set_bind_group(enc, 0, pCtx->bindGroup, 0, 0);
+        wgpu_render_bundle_encoder_draw(enc, 6, 1, 0, 0);
+        pCtx->bundle = wgpu_render_bundle_encoder_finish(enc);
+    }
+    //renderCreateSwapChain(pCtx);
+    last = emscripten_get_now() - (1000.0 / 60.0);
+    emscripten_request_animation_frame_loop((rafCbFn)renderFrame, pCtx);
     return;
 }
 
 void renderPipelineInit(WGpuDevice result, renderCtx *pCtx)
 {
     pCtx->device = result;
+    wgpu_device_set_lost_callback(result, lostcb, NULL);
     pCtx->queue = wgpu_device_get_queue(pCtx->device);
+    renderCreateSwapChain(pCtx);
     {
         WGpuBufferDescriptor desc;
         desc.size = sizeof(scaleInfo);
@@ -229,9 +327,8 @@ extern "C" EMSCRIPTEN_KEEPALIVE
 int renderAdapterInit(renderCtx *pCtx)
 {
     WGpuRequestAdapterOptions options = {};
-    options.powerPreference = WGPU_POWER_PREFERENCE_HIGH_PERFORMANCE;
+    options.powerPreference = WGPU_POWER_PREFERENCE_LOW_POWER;
 
-    pCtx->canvasCtx = wgpu_canvas_get_webgpu_context("");
     pCtx->texFmt = navigator_gpu_get_preferred_canvas_format();
     navigator_gpu_request_adapter_async(&options, (WGpuRequestAdapterCallback) renderDeviceInit, pCtx);
     return 0;

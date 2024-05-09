@@ -354,7 +354,7 @@ let api = {
     // The canvas context texture is a special texture that automatically invalidates itself after the current rAF()
     // callback if over. Therefore when a new swap chain texture is produced, we need to delete the old one to avoid
     // accumulating references to stale textures from each frame.
-
+    
     // Acquire the new canvas context texture..
     canvasContext = wgpu[canvasContext].getCurrentTexture();
     
@@ -372,6 +372,8 @@ let api = {
       canvasContext.wid = 1;
       canvasContext.derivedObjects = []; // GPUTextureViews are derived off of GPUTextures
     }
+
+
     // The canvas context texture is hardcoded the special ID 1. Return that to caller.
     return 1;
   },

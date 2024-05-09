@@ -8,8 +8,11 @@
 #include "webgpu/lib_webgpu_cpp20.cpp"
 #include "render.cpp"
 #include "locking.cpp"
+#include "fonts.cpp"
 #include "math.h"
+#include "inputs.hpp"
 
+InputQueue<10> globalInput{};
 
 EM_JS(void, postCanvas, (int worker, const char *canvas), {
   var proxyCanvasNew = document.querySelector(UTF8ToString(canvas)).transferControlToOffscreen();
@@ -20,180 +23,79 @@ EM_JS(void, postCanvas, (int worker, const char *canvas), {
 
 EM_BOOL wheelEvt(int eventType, const EmscriptenWheelEvent *wheelEvent, void *userData)
 {
-  //printf("%u %f %f\n", wheelEvent->mouse.ctrlKey, -wheelEvent->deltaX, wheelEvent->deltaY);
-  if (!wheelEvent->mouse.ctrlKey)
-  {
-    __atomic_fetch_add((unsigned int*)&renderMeta.scrollDirty, 1, __ATOMIC_RELAXED);
-    vec2d toAdd = vec2d{(f64)-wheelEvent->deltaX,(f64)wheelEvent->deltaY };
-    renderMeta.offsInches += toAdd / 96.0 / renderMeta.scale;
-    renderMeta.isTouch = false;
-    __atomic_fetch_add((unsigned int*)&renderMeta.scrollDirty, 1, __ATOMIC_RELAXED);
-  }
-  else
-  {
-    f64 mulv = pow(2.0, - wheelEvent->deltaY  / 96.0 );
-    __atomic_fetch_add((unsigned int*)&renderMeta.scrollDirty, 1, __ATOMIC_RELAXED);
-    renderMeta.scale *= mulv;
-    renderMeta.isTouch = false;
-    __atomic_fetch_add((unsigned int*)&renderMeta.scrollDirty, 1, __ATOMIC_RELAXED);
-  }
+  InputEvent evt{};
+  evt.type = wheelEvent->mouse.ctrlKey ? InputEventType::Zoom : InputEventType::Scroll;
+  evt.pos = vec2d{(f64)wheelEvent->deltaX,(f64)wheelEvent->deltaY };
+  evt.pos /= 96.0;
+  inputAddEvent(&globalInput, evt);
   return true;
 }
 
 void updateCanvasMeta()
 {
     double ratio = emscripten_get_device_pixel_ratio();
-    double cssX, cssY;
-    emscripten_get_element_css_size("canvas", &cssX,  &cssY);
-    __atomic_fetch_add((unsigned int*)&renderMeta.renderDirty, 1, __ATOMIC_RELAXED);
-    renderMeta.dpi = 96.0 * ratio;
-    renderMeta.cssDims = vec2d{cssX, cssY};
-    renderMeta.screenInches = renderMeta.cssDims / 96.0;
-    renderMeta.screenDims = renderMeta.cssDims * ratio;
-    __atomic_fetch_add((unsigned int*)&renderMeta.renderDirty, 1, __ATOMIC_RELAXED);
+    vec2d cssDims{};
+    emscripten_get_element_css_size("canvas", &cssDims[0],  &cssDims[1]);
+    f64 dpi = 96.0 * ratio;
+    vec2d screenDims = cssDims * ratio;
+    printf("screenDims %f %f\n", screenDims[0], screenDims[1]);
+    __atomic_store_n((unsigned int*)&renderMeta.renderDirty, (unsigned int)(renderMeta.renderDirty + 1u), __ATOMIC_RELAXED);
+    renderMeta.dpi = dpi;
+    renderMeta.screenDims = screenDims;
+    __atomic_store_n((unsigned int*)&renderMeta.renderDirty, (unsigned int)(renderMeta.renderDirty + 1u), __ATOMIC_RELAXED);
 }
-
-
-
-struct TouchCtxPt
-{
-    vec2d coords;
-    u64 id;
-};
-
-vec2d getBarycenter(vec2d *pts, usize numPts)
-{
-  vec2d pt{};
-
-  for(u64 i = 0; i <numPts; i++ )
-  {
-    pt += pts[i];
-  }
-  pt /= (f64) numPts;
-  return pt;
-}
-f64 magScale(vec2d *pts, usize num)
-{
-  if(num != 2) return 1.0;
-  return smag(pts[1] - pts[0]);
-}
-
-struct TouchCtx
-{
-    u64 numTouches;
-    TouchCtxPt start[2];
-};
-
-TouchCtx tCtx{};
-
-constexpr f64 epsilon = 0.000001;
 
 EM_BOOL consumeTouch(int eventType, const EmscriptenTouchEvent *touchEvent, void *userData)
 {
+  InputEventType evtT;
+
   switch(eventType)
   {
     case EMSCRIPTEN_EVENT_TOUCHSTART:
     {
-      
-      u64 iterNum = 0;
-      iterNum--;
-      while (tCtx.numTouches != 2 && (++iterNum) != touchEvent->numTouches)
-      { 
-          if (tCtx.start[0].id == touchEvent->touches[iterNum].identifier && tCtx.numTouches == 1)
-          {
-            continue;
-          }
-          tCtx.start[tCtx.numTouches].coords = vec2d{(double)touchEvent->touches[iterNum].clientX, (double)touchEvent->touches[iterNum].clientY};
-          tCtx.start[tCtx.numTouches].id = touchEvent->touches[iterNum].identifier;
-          tCtx.numTouches++;
-      }
+      evtT = InputEventType::TouchBegin;
       break;
     }
     case EMSCRIPTEN_EVENT_TOUCHMOVE:
     {
-      vec2d pts[2];
-      pts[0] = tCtx.start[0].coords;
-      pts[1] = tCtx.start[1].coords;
-      vec2d opts[2];
-      opts[0] = tCtx.start[0].coords;
-      opts[1] = tCtx.start[1].coords;
-      for (u64 i = 0; i < touchEvent->numTouches; i++)
-      {
-        for(u64 j = 0; j < tCtx.numTouches; j++)
-        {
-          if(tCtx.start[j].id == touchEvent->touches[i].identifier)
-          {
-            pts[j] =  vec2d{(double)touchEvent->touches[i].clientX, (double)touchEvent->touches[i].clientY};
-            break;
-          }
-        }
-      }
-      auto fCenter = getBarycenter(pts, tCtx.numTouches);
-      auto oCenter = getBarycenter(opts, tCtx.numTouches);
-      auto diff = (oCenter - fCenter) / 96.0  /  renderMeta.scale;
-      
-
-
-      auto scaleF = magScale(pts, tCtx.numTouches);
-      auto scaleO = magScale(opts, tCtx.numTouches);
-      auto scale = renderMeta.scale;
-      if (tCtx.numTouches == 2){
-        scale *= sqrt((scaleF+epsilon) / (scaleO+epsilon));
-        diff = ((oCenter / renderMeta.scale) - (fCenter / scale)) / 96.0;
-      } 
-
-      diff[0] = -diff[0];
-      tCtx.start[0].coords = pts[0];
-      tCtx.start[1].coords = pts[1];
-      __atomic_fetch_add((unsigned int*)&renderMeta.scrollDirty, 1, __ATOMIC_RELAXED);
-    renderMeta.offsInches += diff;
-    renderMeta.scale = scale;
-    renderMeta.isTouch = true;
-    __atomic_fetch_add((unsigned int*)&renderMeta.scrollDirty, 1, __ATOMIC_RELAXED);
-    break;
+      evtT = InputEventType::TouchMove;
+      break;
     }
     case EMSCRIPTEN_EVENT_TOUCHCANCEL:
     case EMSCRIPTEN_EVENT_TOUCHEND:
     {
-      b usedOne = true;
-      b usedTwo = true;
-      for(u64 iterNum = 0; iterNum != touchEvent->numTouches; iterNum++)
-      {
-        for(u64 i = 0; i < tCtx.numTouches; i++)
-        {
-          if (tCtx.start[i].id == touchEvent->touches[iterNum].identifier && touchEvent->touches[iterNum].isChanged)
-          {
-            usedOne = usedOne && !(i == 0) ;
-            usedTwo = usedTwo && !(i == 1);
-            break;
-          }
-        }
-      }
-      if(tCtx.numTouches == 2 && !usedOne)
-      {
-        tCtx.start[0] = tCtx.start[1];
-      }
-      tCtx.numTouches -= !usedOne;
-      tCtx.numTouches -= !usedTwo;
-      
+      evtT = InputEventType::TouchEnd;
       break;
     }
+    default:
+    {
+      return true;
+    }
+  }
+  for(usize i = 0; i < touchEvent->numTouches; i++)
+  {
+    InputEvent evt{};
+    if(!touchEvent->touches[i].isChanged)
+      continue;
+    evt.type = evtT;
+    evt.pos = vec2d{(f64)touchEvent->touches[i].clientX, (f64)touchEvent->touches[i].clientY};
+    evt.pos /= 96.0;
+    evt.identifier = touchEvent->touches[i].identifier;
+    inputAddEvent(&globalInput, evt);
   }
   return true;
 }
 
-EM_JS(void, exitIncompatible, (), {
-    document.querySelector("body").innerHTML="Please use a WebGPU-compatible browser.";
-});
 extern "C"
 int main()
 {
     renderState = 0;
     renderMeta = {};
-    renderMeta.scale = 1.0;
     if(!navigator_gpu_available())
     {
-      exitIncompatible();
+      EM_ASM({
+        document.querySelector("body").innerHTML="Please use a WebGPU-compatible browser.";
+      });
       return -1;
     }
     updateCanvasMeta();
@@ -205,6 +107,7 @@ int main()
     emscripten_set_touchcancel_callback("canvas", 0, true, consumeTouch);
     auto worker = emscripten_malloc_wasm_worker(4096);
     renderWorker = worker;
+    fontTest();
     emscripten_wasm_worker_post_function_v(worker, renderMain);
     waitUntilValAsync<postCanvas>(&renderState, 1, renderWorker, "canvas");
     return 0;

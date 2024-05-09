@@ -10,7 +10,6 @@ template <auto Fn, typename ...T>
 static inline u<1> waitAsyncRaw(u32 *addr, u32 val, T ...args)
 {
     u32 result;
-    u32 arr[sizeof...(args)];
     EM_ASM({
         let prom = Atomics["waitAsync"](HEAP32, arguments[0] >> 2, arguments[1]);
         let realArgs = Array.prototype.slice.call(arguments, 4, arguments.length);
